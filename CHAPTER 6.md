@@ -14,11 +14,24 @@
   * level: organisation or billing account
   * good with Project Creator
 * roles are collections of permissions to manage GCP resources
-* owning project is completely seperate to controlling billing ac
+* owning project is completely seperate to controlling billing account
 
-#Cloud Shell
+##Cloud Shell
 * no need for cloud SDK
 * utilities all up-to-date and _fully authenticated_
 * automatic SSH key management
 * easy access to pre-installed tools
 * can preview web app on local port
+
+### Cloud Shell Tools
+* node
+* nodemon
+
+## Data Flows
+* are everything
+
+| Do what | Alternative | Services |
+| --- | --- | --- |
+| Moving | Extract | Network |
+| Processing | Transform | Compute |
+| Remembering | Load | Storage
