@@ -1,0 +1,132 @@
+{
+  "instance": {
+    "attributes": {
+      "base-server-url": "https://ssh.cloud.google.com",
+      "block-project-ssh-keys": "true",
+      "cos-update-strategy": "update_disabled",
+      "environments-devops-cloud-google-com_environment-receiver-port": "934",
+      "environments-devops-cloud-google-com_secret": "orh75UwzJ6ppi1IzUKktJZASBK/b3V9sQ3tB2gvoYh4=",
+      "oauth-client-id": "618104708054-m0mqlm35l2ahieavnib6emtan2k95ps9.apps.googleusercontent.com",
+      "startup-script": "function ensure-docker() {\n    # Add container name to log output so that stackdriver logs can be filtered by name.\n    cat << EOF > /etc/docker/daemon.json\n    {\n      \"live-restore\": true,\n      \"storage-driver\": \"overlay2\",\n      \"log-driver\": \"json-file\",\n      \"log-opts\": {\n        \"tag\": \"{{ printf \\\"%.50s\\\" .Name}}\"\n      }\n    }\nEOF\n\n    systemctl restart docker.service\n    until docker ps &>/dev/null; do\n      echo 'Waiting for functional Docker...'\n      sleep 2\n    done\n    until docker pull gcr.io/google_containers/pause:2.0 &>/dev/null || docker pull busybox &>/dev/null; do\n      echo 'Restating docker daemon and waiting for Docker network connectivity...'\n      systemctl restart docker.service\n      sleep 2\n    done\n}\nfunction setup-swap() {\n    modprobe zram num_devices=1\n    echo 768M > /sys/block/zram0/disksize\n    mkswap /dev/zram0\n    swapon /dev/zram0\n    cat /proc/swaps\n}\nfunction enable-stackdriver-logging() {\n    cat << EOF > /etc/stackdriver/logging.config.d/fluentd-lakitu.conf\n      # Read docker log files, which are formatted as JSON with a \"log\" key.\n      <source>\n        @type tail\n        path /var/lib/docker/containers/*/*.log\n        pos_file /var/log/google-fluentd/containers.log.pos\n        read_from_head true\n        <parse>\n          @type json\n          time_key time\n          time_format %Y-%m-%dT%H:%M:%S.%N%Z\n        </parse>\n        tag containers\n      </source>\n\n      # Parse contents of the \"log\" key, which should be JSON formatted for Stackdriver\n      <filter containers>\n        @type parser\n        key_name log\n        emit_invalid_record_to_error false\n        <parse>\n          @type multi_format\n          <pattern>\n            format json\n          </pattern>\n          <pattern>\n            format none\n          </pattern>\n        </parse>\n      </filter>\n\n      # Send log lines to Stackdriver. Tune performance to consume fewer resources.\n      <match containers>\n        @type google_cloud\n        flush_interval 10s\n        retry_wait 30\n        num_threads 4\n        enable_monitoring false\n      </match>\n\n      # Drop the logs so they don't get forwarded to the in-built stackdriver output.\n      <match containers>\n        @type null\n      </match>\nEOF\n    sed -i 's/^LOGGING_AGENT_DOCKER_IMAGE.*/LOGGING_AGENT_DOCKER_IMAGE=\\\"gcr.io\\/stackdriver-agents\\/stackdriver-logging-agent:1.6.37\\\"/' \\\n      /etc/stackdriver/env_vars\n    # We don't edit cpu limit based upon machine type. as it's a system process, we\n    # don't want it to consume more CPU on a larger machine (e2-medium).\n    cat /usr/lib/systemd/system/stackdriver-logging.service|sed \\\n      's/ExecStart=\\/usr\\/bin\\/docker run/ExecStart=\\/usr\\/bin\\/docker run --cpus=0.03 -m=96m/' >> /etc/systemd/system/stackdriver-logging.service\n    systemctl daemon-reload\n    systemctl start stackdriver-logging.service\n}\nfunction generate-ssh-hostkeys() {\n  ssh-keygen -f /etc/ssh/ssh_host_rsa_key -t rsa -C 'host' -N ''\n  ssh-keygen -f /etc/ssh/ssh_host_dsa_key -t dsa -C 'host' -N ''\n  ssh-keygen -f /etc/ssh/ssh_host_ecdsa_key -t ecdsa -C 'host' -N ''\n}\nfunction pre-cache-cloudshell-container() {\n  /usr/bin/docker run --privileged gcr.io/cloudshell-images/cloudshell\n}\nfunction pre-cache-theia-container() {\n  /usr/bin/docker run -e \"CACHE_ONLY=true\" --privileged gcr.io/cloudshell-images/theia\n}\nfunction set-inotify-watches-for-theia() {\n  echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && \\\n    sudo sysctl -p\n}\nfunction main() {\n    ensure-docker\n    setup-swap\n    enable-stackdriver-logging\n    generate-ssh-hostkeys\n    pre-cache-cloudshell-container\n    pre-cache-theia-container\n    set-inotify-watches-for-theia\n    mount --make-rshared /var\n    chmod +w /etc/default/kubelet\n    echo \"KUBELET_OPTS=\\\" \\\n    --pod-manifest-path=/etc/kubernetes/manifests/ \\\n    --enable-cadvisor-json-endpoints=false \\\n    --enable-debugging-handlers=false \\\n    --enable-server=false \\\n    --fail-swap-on=false \\\n    --file-check-frequency=200ms \\\n    --healthz-port=0 \\\n    --read-only-port=0 \\\n    --register-node=false \\\n    --sync_frequency=200ms \\\n    --image-gc-high-threshold=100 \\\n    --eviction-hard=\\\"\\\" \\\n    --v=2 \\\n    \\\"\" \\\n    > /etc/default/kubelet\n    echo 'Restarting kubelet'\n    systemctl enable kubelet.service\n    systemctl restart kubelet.service || exit 1\n    SECRET=$(curl -H Metadata-Flavor:Google -f http://169.254.169.254/computeMetadata/v1/instance/attributes/environments-devops-cloud-google-com_secret)\n    BASE_SERVER_URL=$(curl -H Metadata-Flavor:Google -f http://169.254.169.254/computeMetadata/v1/instance/attributes/base-server-url)\n    PROJECT=$(curl -H Metadata-Flavor:Google -f http://169.254.169.254/computeMetadata/v1/project/project-id)\n    OAUTH_CLIENT_ID=$(curl -H Metadata-Flavor:Google -f http://169.254.169.254/computeMetadata/v1/instance/attributes/oauth-client-id)\n    OAUTH_REDIRECT_PATH=$(curl -H Metadata-Flavor:Google -f http://169.254.169.254/computeMetadata/v1/instance/attributes/oauth-redirect-path)\n\n    cat << EOF > /etc/kubernetes/manifests/receiver.yaml\n!!io.kubernetes.client.models.V1Pod\n'apiVersion': 'v1'\n'kind': 'Pod'\n'metadata':\n  'name': 'receiver'\n'spec':\n  'containers':\n  - 'securityContext':\n      'privileged': true\n    'env':\n    - 'name': 'BASE_SERVER_URL'\n      'value': '$BASE_SERVER_URL'\n    - 'name': 'OAUTH_REDIRECT_PATH'\n      'value': '$OAUTH_REDIRECT_PATH'\n    - 'name': 'OAUTH_CLIENT_ID'\n      'value': '$OAUTH_CLIENT_ID'\n    - 'name': 'WHITELISTED_OAUTH_CLIENTS'\n      'value': '618104708054-9r9s1c4alg36erliucho9t52n32n6dgq.apps.googleusercontent.com,618104708054-plueempusfrhq9l2dk3do2jtapm533gi.apps.googleusercontent.com'\n    - 'name': 'WHITELISTED_HEALTH_CHECK_ORIGINS'\n      'value': 'https://cloudssh-e2e\\.sandbox\\.google\\.com,https://cloudssh\\.sandbox\\.google\\.com,https://cloudssh-staging\\.sandbox\\.google\\.com,https://.*\\.corp\\.google\\.com,https://.*\\.corp\\.google\\.com:(\\d)*,https://ide\\.cloud\\.google\\.com,https://shell\\.cloud\\.google\\.com,https://ssh\\.cloud\\.google\\.com'\n    - 'name': 'ENV_DIR'\n      'value': '/var/environments/'\n    - 'name': 'MANIFEST_DIR'\n      'value': '/etc/kubernetes/manifests'\n    - 'name': 'VOLUME_DATA_DIR'\n      'value': '/var/volumes'\n    - 'name': 'SECRET'\n      'value': '$SECRET'\n    - 'name': 'PORT'\n      'value': '934'\n    - 'name': 'ENABLE_LOCALHOST_REPLACEMENT'\n      'value': 'true'\n    'image': 'gcr.io/devops-environments/receiver:latest'\n    'imagePullPolicy': 'Never'\n    'name': 'receiver'\n    'ports':\n    - 'containerPort': !!int '934'\n      'hostPort': !!int '934'\n    'volumeMounts':\n    - 'mountPath': '/var/environments/'\n      'name': 'environments'\n    - 'mountPath': '/etc/kubernetes/manifests/'\n      'name': 'manifests'\n    - 'mountPath': '/var/volumes/'\n      'name': 'volumes'\n    - 'mountPath': '/var/google/'\n      'name': 'google'\n      'mountPropagation': 'Bidirectional'\n    - 'mountPath': '/dev/'\n      'name': 'dev'\n  - 'env':\n    - 'name': 'ENVIRONMENT'\n      'value': 'autopush'\n    - 'name': 'METRICS_DIR'\n      'value': '/var/volumes/metrics'\n    - 'name': 'PROJECT_ID'\n      'value': '$PROJECT'\n    'image': 'gcr.io/cloudshell-images/metricsreporter:latest'\n    'imagePullPolicy': 'Never'\n    'name': 'metricsreporter'\n    'volumeMounts':\n    - 'mountPath': '/var/volumes/metrics/'\n      'name': 'metrics'\n  'dnsPolicy': 'Default'\n  'restartPolicy': 'Always'\n  'volumes':\n  - 'name': 'environments'\n    'hostPath':\n      'path': '/var/environments/'\n  - 'name': 'manifests'\n    'hostPath':\n      'path': '/etc/kubernetes/manifests/'\n  - 'name': 'volumes'\n    'hostPath':\n      'path': '/var/volumes/'\n  - 'name': 'metrics'\n    'hostPath':\n      'path': '/var/volumes/metrics'\n  - 'name': 'google'\n    'hostPath':\n      'path': '/var/google/'\n  - 'name': 'dev'\n    'hostPath':\n      'path': '/dev/'\nEOF\n\n      # Allow incoming TCP connections on below ports:\n      # 934(Environment Receiver)\n      # 980(Environment Gateway)\n      # 6000(Cloud Shell SSH).\n      iptables -w -A INPUT -p tcp -m multiport --dports 934,980,6000 -j ACCEPT\n\n      # Create new chain\n      iptables -N sandbox\n      # Allow 1000 packets per second.\n      iptables -A sandbox -p udp -m limit --limit 1000/s -j ACCEPT\n      # Drop all others.\n      iptables -A sandbox -p udp -j REJECT\n      # Forward traffic coming from docker through the chain.\n      iptables -I FORWARD -o eth0 -m state --state NEW -j sandbox\n\n      echo 'VM is ready!'\n      }\n      main |& tee /dev/ttyS2\n"
+    },
+    "cpuPlatform": "AMD Rome",
+    "description": "",
+    "disks": [
+      {
+        "deviceName": "boot",
+        "index": 0,
+        "interface": "SCSI",
+        "mode": "READ_WRITE",
+        "type": "PERSISTENT-SSD"
+      },
+      {
+        "deviceName": "home",
+        "index": 1,
+        "interface": "SCSI",
+        "mode": "READ_WRITE",
+        "type": "PERSISTENT"
+      }
+    ],
+    "guestAttributes": {},
+    "hostname": "boost-6rbmr.c.cloud-devshell-prod.internal",
+    "id": 2030837333455217756,
+    "image": "projects/cloud-devshell-dev/global/images/cloud-shell-v20201023-234807",
+    "legacyEndpointAccess": {
+      "0.1": 0,
+      "v1beta1": 0
+    },
+    "licenses": [
+      {
+        "id": "1001010"
+      },
+      {
+        "id": "166739712233658766"
+      },
+      {
+        "id": "6880041984096540132"
+      }
+    ],
+    "machineType": "projects/751522334863/machineTypes/e2-standard-4",
+    "maintenanceEvent": "NONE",
+    "name": "boost-6rbmr",
+    "networkInterfaces": [
+      {
+        "accessConfigs": [
+          {
+            "externalIp": "34.90.11.145",
+            "type": "ONE_TO_ONE_NAT"
+          }
+        ],
+        "dnsServers": [
+          "169.254.169.254"
+        ],
+        "forwardedIps": [],
+        "gateway": "10.240.0.1",
+        "ip": "10.240.6.206",
+        "ipAliases": [],
+        "mac": "42:01:0a:f0:06:ce",
+        "mtu": 1460,
+        "network": "projects/751522334863/networks/default",
+        "subnetmask": "255.255.0.0",
+        "targetInstanceIps": []
+      }
+    ],
+    "preempted": "FALSE",
+    "remainingCpuTime": -1,
+    "scheduling": {
+      "automaticRestart": "TRUE",
+      "onHostMaintenance": "MIGRATE",
+      "preemptible": "FALSE"
+    },
+    "serviceAccounts": {
+      "default": {
+        "aliases": [
+          "default"
+        ],
+        "email": "europe-west4-cs-boost@cloud-devshell-prod.iam.gserviceaccount.com",
+        "scopes": [
+          "https://www.googleapis.com/auth/logging.write",
+          "https://www.googleapis.com/auth/monitoring.write"
+        ]
+      },
+      "europe-west4-cs-boost@cloud-devshell-prod.iam.gserviceaccount.com": {
+        "aliases": [
+          "default"
+        ],
+        "email": "europe-west4-cs-boost@cloud-devshell-prod.iam.gserviceaccount.com",
+        "scopes": [
+          "https://www.googleapis.com/auth/logging.write",
+          "https://www.googleapis.com/auth/monitoring.write"
+        ]
+      }
+    },
+    "tags": [
+      "environments-instance"
+    ],
+    "virtualClock": {
+      "driftToken": "0"
+    },
+    "zone": "projects/751522334863/zones/europe-west4-b"
+  },
+  "oslogin": {
+    "authenticate": {
+      "sessions": {}
+    }
+  },
+  "project": {
+    "attributes": {
+      "block-project-ssh-keys-ssh-in-the-browser": "true",
+      "firewall-policy": "g_on_g-firewall-opt-out_has_its_own_firewall_enforcer",
+      "gke-asia-east1-ff0c1ca4-cidr": "default:10.24.0.0/14",
+      "gke-asia-southeast1-5fad38a0-cidr": "default:10.16.0.0/14",
+      "gke-europe-west1-fdb7ea1f-cidr": "default:10.4.0.0/14",
+      "gke-europe-west4-44fe48e7-cidr": "default:10.20.0.0/14",
+      "gke-us-central1-e84e1004-cidr": "default:10.48.0.0/14",
+      "gke-us-east1-2661cba7-cidr": "default:10.44.0.0/14",
+      "gke-us-west1-17ec1af2-cidr": "default:10.8.0.0/14",
+      "sshKeys": "gke-17ec1af275cf7fd52d48:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7Je7n5pDRLWDQi/sqHtnDCo5qXh+ItIKazrx531vz5TcEcm8pgMsp8QCpiDm+YKy1bcRHb/Sv+tbLv+64Wwd2tyWSSNSIz4/7WRUFNFUuUQXHa9lLM+kcuMji4xJGHllF1T/coevpy0zawZKMNJh/WgMBNiOLvyAEtqFtyqtmpMhAYvo3OL1HA/ySYc6WIYoGzPb5nvpQ9uAAtn/6OkHRDC2qbfHbZEysGrViYmY+3fkyOyTJz3JpYC14056d3N2eKwy1n1uZno51YlJnZiztsKBe6DvpTnvzFQbQ1wKCzujOEHbDZDo7T6E1NtLiSbukC5eaby5gmtQQik9R/Z0J gke-17ec1af275cf7fd52d48@gke-17ec1af275cf7fd52d48\ngke-5fad38a03e038ca6ca38:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCPSYjnFqSLuK8Ycf6JBVJOiArY08eREtl+kNcTaTZ4O/zmKeRp+8ScTvk/HG4Wi9tQzGA+U0ygFzj5lfoFmn/bDPPal5G/FKgk4c9Qb5yrqxKfb90pL4jgb6dncnO8uChzGHmsiw1T9TaQAdA6WVAtYVq7f3892tVps/51rLOWDNOQYYgK+cvuFPwGifdjw4xMOXMOKfc0rCEDUdpt2wg+/32a8KpxBkpetki5cXsTcoz+McMzEuJwYSmGuBQOWbTfev9d8BSeyJRlt281kF4/CIiQbMNfaRP5xYX8Y4ARm9VVIuW5xH4Qauxu4t1R4WNA6GaIki9lPmVWc8JFGYKR gke-5fad38a03e038ca6ca38@gke-5fad38a03e038ca6ca38\ngke-17ec1af275cf7fd52d48:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCUul3bja3c4i9E9yMVp4ahr2/YLsHTSmuLaP0kCEohRWXnnz0D6Sye3zgZwAf248u82MhDsHA5hB1CrT9gp8CMr+XaQK7lDLdHhIvIQYeqqa99KVKPXjmTLImjspLqb214Fbg1jp8RUvKx3hKr2WuOMA6YXpoEWZ71jbCJD54zovkXjUfsuD0o6JCJUVWKbwVTGIXYj2RH4MTDEPa2GoA0nrwTPZP/C/r591ed4MzljwxZVpOxJav1H1yb90+C6DA8ge3DzH1rncIYGWak86xvhr/sxhZ67XrRJFABJe6/BcOGoRbdiitWpBOsIoM1nQusbX4DADrKI2F1uuiHkmBP gke-17ec1af275cf7fd52d48@gke-17ec1af275cf7fd52d48\ngke-17ec1af275cf7fd52d48:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCqrbx+35tYwR8qgo2f+MIoD2uUZmCgMhZkjgUihpbQSrfINCpv5LTl0RNMgSR/o6CwbCjBpEmMl4LcEMqxXK+sl6hWwqfbTBu708ktgt5D+4mY2MV+5RHaryOlVjxh25iik4pb8cksdgDnnhw2zDg5b4U4uAuqaYulHUFg8Ub2xBjj8u1X8e3oVkXERX9m6FhTplrdNpgrDk72aSILcad08D6zrQ9xtMdO8hTM6tSMiNkFah8oetWeNqewPO89cuzla0eka+qDNX+ZGlFEAaUPf8ultxhN1Sy545peeSlEIDIwv2lcIJ/SRpj7DrORCYSIgDsDa9WP776LFnbC5+1j gke-17ec1af275cf7fd52d48@gke-17ec1af275cf7fd52d48\ngke-5fad38a03e038ca6ca38:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC6XkH9GxeDX5Ubul1jtLVqFEbfCbmfvRNaqbNyfcS8UMVERU/KHpc6gUq8XJKjGIQBWa9OSMSY+YEphLSKeaxB0XgKmiOwO/vhf4ap0HBFRfTXccxUcRE85phYPEIETPNs60bUjC6n5FHa8S4O1//EBMBDTzbVEs6UDbvKHGI63JVvMVNgvCRwOV5qvEP3/JM0+17l+JQ2QuTHL+sVuPE7yqFT5jChcIrVwkQkfTtRMfE0rbQcXnLxyIIj/puSUtJfDj1ePq96rUgd/7t6lp47IlcNoLuQfwSwIgVhwKAqEbMvLfvFDepeTwJc/rBNvQ1rLhm8OmP9xw0B3ELIyn+L gke-5fad38a03e038ca6ca38@gke-5fad38a03e038ca6ca38\ngke-5fad38a03e038ca6ca38:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCUCMPJhHs6+ay/r9/q2Nl3HGTDrhMJ9GnZfBzYpHmrEDlFpC7+7x2h4/YJgHKt2NSHvdHh4sQ4TjiSgMGVZ952S8z4gPVBUr1stnpGpiGmlcW1xk/ERoZ06xXDLIAdpzq/np5Lp6hJQydFGHths/iYsszUmWRtUSThDOjJKFJBbHWipkc5Ti/axzGbUCVEtSLRwgu/PV4z0j1r9psWb/a2H5f1xtk8NMriM9jJm+Gg9UjFG/uiBulje/o4SyTuYAt5rZzhYrxyeQBuGOC419XluJD3E95TFjI0zlt+BJtT4YGNRX0mZHdVrzSO6SYES4tdNnit5Kpz5ij7+HNu+qe3 gke-5fad38a03e038ca6ca38@gke-5fad38a03e038ca6ca38\ngke-fdb7ea1f6f2e95c7a388:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDdmuDPQwa/5fJQX0JFOjHp30KBlT8TIGAPG2xKm4+cXS9eVXfQ3Pm0sNM6R4nRVduGFPgUhgWPY8bA7HNQGf+sOUKi1Ow/t9rRjpMzCqcLdXTb05ap/VuAeDgFm1F+hEOhwcTFUcChsoREo7VbTnyAJOl2HjSRYnBdhjGBy+d9rqEcHoWSxW3XxUtKMArSraETW2V/qAqrAUWkgwmJle59ylWg1iqoIlaPdyIy8k1NgGts5xWEYko7Y8J74vtlvBixjvPvXIFj2fVDOIonoOsDB8BEBcSMxVtglT9+36527BfMbLYF+qwOQL1pW3uT5pbWwo3cIErJ4D56hfJapIQR gke-fdb7ea1f6f2e95c7a388@gke-fdb7ea1f6f2e95c7a388\ngke-e84e1004cda52cb1e344:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDSHEvZIM13qBD2Fn7oHPbqY4hEuLuVCBjJ+vRgYg7DTZt2j9ruIP8OGTpv4TQsjc9z1j2JcWwMyqZxGvSYiiZWNOGPfSree2mSc8hhxyJPT63HcEi019AZB9Vq4R3szGuERUFZWX3zqLtZGxXndY7w4mRnBiz32lZYj9I7IgHpAa7TYumabaaYu0bAs2gBmT985cFaUz5z9sMGC+HWvvs/Jyoq/s8+7KQ1IARkOAtg03LCae7/lSS8NfFOe48gAEkx0B7vgRBJqMLB5X1YC3NZv6UmEEJHhPFp9OgGk7hQOXxldL2dqkEg4jf41dyKnvztC8P2DtT0IK16WL8x9leh gke-e84e1004cda52cb1e344@gke-e84e1004cda52cb1e344\ngke-2661cba72c1e95727f40:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCKhgLvwNRixpscRH9doZNWuM48EdymJ+CfSY05INw3gZgvYPVeAboKnXK3pasfgxd6x9mUS2F7dK9Z1wn6Hp5a2Q9RSRmY2ZH+sfnH8cn3zOZLQ0YPHVfo44XP601qWGZDKvh0vLFicB3LMHyh1nvLQff4IT8aX0+j+W4a0o23l0uurI8VGj55ZJ7jVs02BytsDWanRAx3/25yZrLzIdFFdtlxr/7H/NZDx1Xb4hEDMN50gzIbL5y419N/eHekBtpPtNru/7vRzd+gh8le6aCft0jLa4IYQHYzK+uCnITGSNc9oeAUs8DTWAHcl+FITOenTxMCGzOoF8HKYm32tl35 gke-2661cba72c1e95727f40@gke-2661cba72c1e95727f40\ngke-e84e1004cda52cb1e344:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4T94Dx/+62pCdiH+qMgVTy6R0o/n1xHwomWVUJCRTUtpR3DcooTV/gNyNAoMxeyoCMeSHOR4ViSQxVz9seb8Gs9Ul+ybKfJtp/XileHzKLiW5FP1cOlHnUwnXt0SQ9cjBWmWrrJxeEIMGi/sbV6rgGaQ1eyHkovSjYgYA6WONXBqTQ39+9WL3jcbrgNt/UKPG5KXgO5pXGVyTAVj86wglbCiOuPaj/ccdYOGskFclbyXjXgCJTs/UxzTAlf52Nqu3iVCztOERmS8whyowkdfVSjunnuZhUB3/LkSGv9YzzdNa2M2Zkyv1e1P+t6sXZ7dmxsHfOmXrEqCr+l6e2uNz gke-e84e1004cda52cb1e344@gke-e84e1004cda52cb1e344\ngke-e84e1004cda52cb1e344:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCxksYffFrtXVFJaKMI7OwPAlL/VTV7x51RSjIDXNb7wVVbtRbLBQq6U4s/IdUm6yMkL5U0RPQ35PM3NYAiT1PohwXnNwkB6zXNDCB6roMNMxUua6SyNKyD7dNX28bG+4hDGR7BKXC7vodpnSaDWIdTT63KAPlAvoVXil/eeMeQJG+LVVZkd/AdQ7gf7s/8WIMvDaEW8SDg61Jos6gDkJKXcjcxLPQOjJBGbAXeUzr3ECGJ0sbZK99GXsc4qffFYSEDt1nNmSjRLwuQK4NkDX1swxkjDcy9Y1eYue8CoLxQBptXt5X8a4zWpd2a8IZzS7SI1+WDgkgjXhftY32v9vAX gke-e84e1004cda52cb1e344@gke-e84e1004cda52cb1e344\ngke-2661cba72c1e95727f40:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCfqWbjpktOUZSdX3WOwt7tHdMsJjwyeEQqhR4wqsdmtE/xB2+uLnxDirSYbCxCWzpdDt3HQKmdpuHSrV0L4lEhbsQPN2PUo2EFN/7dnekjo6hnlHqv6u0E4tBMQHFxBWrxJ3o0+h/jZiE4tWvp9pBrf8aWj0pYZ9sz1IHlK0pgclPR2FlYK0SBNjNPGOmQnTL90mXAIOnPbipOD2dEJdXxzI/Y7oj2SPrTMLidsJnfLVVVhOA+aldyMKQP9LbKHbMQ3Z/ItJBfAtaYROpD5w0iklTUQ4rybUtqWrQltr+7KDXBECEXakN/f3DPRXSegC+RH+MQKR5wXXZYRUSOjpad gke-2661cba72c1e95727f40@gke-2661cba72c1e95727f40\ngke-44fe48e7117ef741d3f5:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCpZ2A5hEoJkigniPX4L1DXMaIyxNAqRDf+hSaF7wtI0XIGEQgZEpnp0EQQK4opRY54fjEK6mdM+ObcAfstW7R95OEJWKD4a7eSOYWotgr5AvvpE7iDNGlaUcIdwtn1pOfMzN9BkNmA5dyzSAbdCMiqR09zqgsQWzX+mJHLjKwno2qIJL9v5lrxK+jlcjbX1c7CjNhK+EVlQeR0MQfsjS9AokiBWUaV8M0Vo0JqKQyO7Vzrpy12oEZx+0UAsY6PY0Fba31MeMIW7sod0/Z+Qhbh1VaxdsCsit0345lIUWJlOxqGpD/FTNTUZ8J/iJuyuMsJC/43jTt6BlFMmEQwBAFz gke-44fe48e7117ef741d3f5@gke-44fe48e7117ef741d3f5\ngke-2661cba72c1e95727f40:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC976UQdkf1+zn329d9zfV/B7OG+rkfVF278dsPGMi3TV8VyHqGR8Rg9TKwmWWy4G7Y+7mA6Y57uSNsK2TkI0J2w+w6nruV4GXt78ZfakbtaqbOGRG3A//yjouE3n33dM+rD2cR+fdvgg6ZBJz2hNjnWLUryv3U/jmB6PFXzZIZAVMOASoa/70JNmzxAZk24OHQbjWbgWU5gLDo4yXXFhMXzQfGPbQ5vv9VP/4fObUUsadt0pc6ksSaPjDAKqAR1Lm46/2cX+jkVnIOprhwWFlewqrfMex5em3cpktnB3hd6L3gyntO1/OiP2XXvPf+MbgW2dGFCH3befCaxf4jE95d gke-2661cba72c1e95727f40@gke-2661cba72c1e95727f40\ngke-44fe48e7117ef741d3f5:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCpBLSHHiC239hwU2BN6Cn0t2bJnJCYItQwR3TwWKyGoZlwm5upyXgxz8Qv/PQ92E9dvI/QBF0P6LSWtqxfJD+eBCnNQ71npe9Za82cxb4yk0e0ulXXrO/goe2FrjOVzwOH4c8T8PZiyxQfsieZrds0c/9g0fBhXpawXjzxdM/t1JB+0YHAEiASAJ45MhyjL3csjjV3NN3qwHTC2Q4lYN2NA96QWdOUvp/6SkGev9Mm1fFHL1fazJIIXoWSnj8YqwOmD6jl2SP0ed9TU8kwgKI0B8bguexX7QkoJjZrqQlPs5kpbbjECr5kXjlFjyDxMc4dGL8WDsUAHiOiKDsw2ZAP gke-44fe48e7117ef741d3f5@gke-44fe48e7117ef741d3f5\ngke-44fe48e7117ef741d3f5:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCupqZost6TB0+cEcTI1Afe+pfu8kNWimeAWzydggZ1i0aBwgIRAWFF+UlEc+hhBydHCSf5wBO0egpmbzmiKVt4x94qplR9G7BfoQ0aVYZmYc1DX92sHzWCvllUPeTKrEYDRp6yatKQF3i3AKfr5LnJf0mSxugV5sIgewkynnOnH7K/Z45YJLsmz8wGxZLymVKEaEb1b19RslwTifPtqYKCh4MYxrqreEUVix9pqdKADlC5Kd/mgcaxVR7O42G7+y7gL9DLlz9t8L1h2KgruZUVBn6D6glKJeEuYn1fvDmBDdAX/RdBFYIynryv/awGDY8LxwAw2Rbyjgqy/6eTP423 gke-44fe48e7117ef741d3f5@gke-44fe48e7117ef741d3f5\ngke-ff0c1ca4c84d138f540a:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDDA9z8SQTAbZkp5S/vAADGSny4ug1nw3SNjv0g4i8DT+P5D8yjjbhTmHqMj1BdIaVui2G6999nDzxiLJ7M46d81SBv8HPiU73TPvaIRCDdGIC8m7kDC/KZa74GQShA363ZBqJ0gWwpaEAAcJ1e5iLnU5+SlboM08R01QUlRix7rCDS8Oe2oXe++IFnJxiv9/RqSOeFcEsiBqDKvtlYVsvxSUYBi5k3EevovDLpUP1eGWJ23P03Bo9zLeRZnM5EwB/RXIRQ+meP3GkMWehb7r3NJ6m139/EZDMIk83Y868sj8T3h6hbqu671pjN0LCC3U3xFcdotk81TV93R8Poodi9 gke-ff0c1ca4c84d138f540a@gke-ff0c1ca4c84d138f540a\ngke-ff0c1ca4c84d138f540a:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCZvfhVzYFL6nrf++CGoCseOxUEDrh3Jwx41ZAR+rTNhhpePCa1WJzF+eRUxsooR3mPuD+ienbKR8ljzN0m0KljtSEwMmPg25mK8ENFrhae5ojquKX0gCj/8i45I8do3K6NxRdb+rgkKNLhpapePaRJ/a4Auaa54BrXVAVJ+ijbrxHO9GbxaCdsbffgRgsEsi7jx7O5LfXI8umtpuacLwZSCVJyCEG2B7ucd4FzhYK5Gp/HpBXVn/z1FZ+iiFiIiPnaTa/UBRuZdOPxw32mJI9m7pWhC1wym4mfcdTP5Hk35vYy0TqT8IdE3hfwjA6kcyTyzs1leKgR5HXctzoFFYzH gke-ff0c1ca4c84d138f540a@gke-ff0c1ca4c84d138f540a\ngke-ff0c1ca4c84d138f540a:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDSi+WtHAN0wnsAvEZKd1JzvCIcjx18rOFnrgpPTm+yX5OIj/lYINhMPtBAhGULtvnESkk70AzF9O6Dsi3+U7pP0iuy4SqMNixgvM/8NKwezf0nbfLvZfSxddHEVFa74ZjKS7u7wOgfjd3vTcZ3PtLL9CCEuaycmKAPd+LefhrzUpHAQhbiWydAQ8RVingouySsyVsWredLezTMepZuQHjPxD3ik3ssFq1TCZ/0cNVhMgl0JLdaLOoKvnUFgU2AB/TQp63IqPQIXfJQlIVEo1r1LP/ygCFEZn94x+x9Cyh9/eeJSj/aGjgkiO/dOMRiD6XiAs3zneFfNMU+nDOiKXGx gke-ff0c1ca4c84d138f540a@gke-ff0c1ca4c84d138f540a\ngke-fdb7ea1f6f2e95c7a388:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDyMC5+IC3Q/dXP3UYb5QW/4LhHM6sYUUeKAG3VMIznxWm0MDHhjAVmTYoT1riTXCNsXwhJdzTEZN/pPcC8Eye7RYBc4OQRADBf0tRFcXN6XCfSGjC9fljUpbCnh5yDDDdxL5GC4EciW7Vg/M7tLQH4dCCklfRCw2lU/+I3ROk/7r6SVUaMCkXHRQwCMpAPy4ehYeQW+gVgfQTYHiHnogDd6ePfXMyGjn1wmyMM8pGT3XSJQFTnyjbf4E3wl6vHrtFasVX1XWOgj2WyXYg3TPTjLa5sdAsp5QI99eDLhzVc2G8ozybWDcdFSpgO2kTVDlwiL9CHnZ+SwTNeY0vobE6v gke-fdb7ea1f6f2e95c7a388@gke-fdb7ea1f6f2e95c7a388\ngke-fdb7ea1f6f2e95c7a388:ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDFubxgdwJoPNZZ/uEOFjQA4fqprBtMRjthgtMU5zje2sMIy+pLp3HQfvzftAFse0OwdjQnfrT9EdVLi1gImq75I1ouUrawS/dEdUoaya0BexpLwEBDGsVGXvna3mfP02+CL5HGy0D+2kUh3etKtvQKPX5O2TjSVEyqZoK44X3lRfuwW4uJFGvUdfwUfR6xYA6NdM+TAdQpMxKiDZsH6xtgskehcNa13vU607J0nAN56vVKLsYgrFzdCaxljSQObpi7jo5EcspDNQFqNdvWVskptJVNAJsmeU1J3+/6TdFqxvpjo2eM8Ytb29HqxPgz2Kc4p5j9HQeaiz2yTJRVI6YZ gke-fdb7ea1f6f2e95c7a388@gke-fdb7ea1f6f2e95c7a388"
+    },
+    "numericProjectId": 751522334863,
+    "projectId": "cloud-devshell-prod"
+  }
+}

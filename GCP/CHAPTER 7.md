@@ -60,7 +60,12 @@
   * create
   * delete  
   * ssh
-* alpha / beta  
+* alpha
+* beta
+  * cloud-shell
+    * ssh
+    * scp
+    * get-mount-command  
 * topic
     
 ## gsutil (=== 'gcloud storage')
