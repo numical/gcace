@@ -16,3 +16,11 @@ Google Certified Cloud Associate Engineer
 | 14/11/20 | Chapter 11 | 1.5 hours  |
 | 14/11/20 | Chapter 11 | 2 hours  |
 | 20/11/20 | Chapter 11 | 2 hours |
+| 22/11/20 | Chapter 11 | 2 hours |
+| 26/11/20 | Chapter 11 | 1.5 hours |
+| 26/11/20 | Chapter 11 - 6/7 | 45 mins |
+| 29/11/20 | Chapter 11 - 7/8 | 1.5 hours |
+| 05/12/20 | Chapter 11 - 8/9 | 2 hours |
+| 11/12/20 | Chapters the rest | 3.5 hours |
+| 12/12/20 | Chapter the rest | 4 hours |
+| 13/12/20 | Chapter the rest | 5 hours |

@@ -27,12 +27,16 @@
 
 # Objects
 ## Pods
-* k*s does not run containers
+* k8s does not run containers
 * these are wrapped in **pods**
 * atomic unit of scheduling
 * in core API group
+* does nothing for scaling or application release; for that...
 ## Deployment
 * wraps a Pod
 * in apps API group
 * brings flexibility: scaling / rolling updates etc.
+
+# kubectl useful
+* -o yaml
 

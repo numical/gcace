@@ -24,7 +24,7 @@
         * writes IPTABLE rules from svc address to pod address
     * pod to pod comms
         1. hence pod > service name
-        1. DNS converst servcie name to service IP
+        1. DNS converts service name to service IP
         1. sent to virtual ethernet has no idea so sends to default gateway
         1. this is cbr0 (~ docker0) which, as a dumb bridge, passes to eth0
         1. which goes via kernel of host, which uses IPTABLE rules
@@ -33,12 +33,12 @@
     * new mode: IPVS mode (native in linux kernel - layer 4 load balancer) 
         * different load balancing options
         * more scalable
-    * "a set of IPVS or IPTABLE rules that trap on service addresses so that traffic is forwarded to podes on the pod network"
+    * "a set of IPVS or IPTABLE rules that trap on service addresses so that traffic is forwarded to pods on the pod network"
         
     
 ## Service
 * stable abstraction for bunch of pods
-* think of as load-blancer/proxy
+* think of as load-balancer/proxy
 * 'front end'
     * gets a stable
         * name (DNS)

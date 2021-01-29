@@ -66,7 +66,7 @@
   * one subnet in every region
   * some default firewall rules
   * new regions auto-created
-  * ni IP ranges for VPC
+  * no IP ranges for VPC itself
 * custom mode
   * create own subnets
 * custom service account
