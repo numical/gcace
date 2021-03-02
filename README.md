@@ -4,6 +4,9 @@ Google Certified Cloud Associate Engineer
 ## Meta
 | Date | Content | Time |
 | --- | --- | ---|
+| 28/09/20 | Chapter 1 + 2 | 45 mins |
+| 29/09/20 | Chapter 3 + 4 | 60 mins |
+| 13/10/20 | Chapter 4.3 | 75 mins |
 | 19/10/20 | Chapter 6+7 | 5 hours |
 | 21/10/20 | Chapter 7 | 30 mins |
 | 23/10/20 | Chapter 7 | 1 hour |
