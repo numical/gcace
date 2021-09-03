@@ -45,7 +45,7 @@
     * your private SDN in GCP
     * covers doors
     * global
-  * subnets
+  * subnets 
     * regional
     * but all connected (data transfer charges)
   * routes
