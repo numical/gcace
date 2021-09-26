@@ -17,7 +17,7 @@
 ## Bucket
 * globally unique name
 * geographic location
-* storage class
+* storage class  << WRONG
   * multi-regional
   * regional
   * nearline
