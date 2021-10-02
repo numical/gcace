@@ -1,9 +1,9 @@
 # Cloud Load Balancing
-| Global | Regional |
+| Global (& ipv6)| Regional |
 | --- | --- |
-| HTTP(S) | Internal TCP/UDP |
-| SSL Proxy | Network TCP/UDP |
-| TCP Proxy | Internal HTTP(S) |
+| HTTP(S) e | Internal HTTP(S) |
+| SSL Proxy e | Network TCP/UDP e|
+| TCP Proxy e | Internal TCP/UDP |
 
 # Managed Instance Groups
 * identical instances based on same instance template
@@ -45,7 +45,8 @@
   3. URL Map for right ...
   4. Backend Service which uses
   5. Health Checks to then redirect to right
-  6. Backend
+  6. Backend service serving
+  7. instance group or NEG
 * Backend Service
   * health check
   * round robin
@@ -88,9 +89,43 @@
       * traffic director services outside of GCP
 
 # SSL proxy / TCP Proxy Load Balancing
-
+* SSL
+  * global
+  * layer 4
+  * terminates SSL
+  * certificate management - only one place
+  * intelligent routing (on load)
+  * traffic form proxy to backend can be SSL or TCP
+* TCP
+  * global
+  * layer 4
 
 # Network Load Balancing
-
+* regional
+* TCP/UDP
+* non-proxied
+  * traffic through load balancer
+  * client IP preserved
+* architecture
+  * backend service
+    * regional
+    * more features - autoscaling, non-legacy 
+  * target pool
+    * group of instances
+    * hash of source ip/port and destination ip/port
+    * one health check
 
 # Internal Load Balancing
+* regional
+* TCP/UDP
+* behind private load balancing address
+* all within VPC
+  * config simpler
+  * lower latency
+  * software defined, fully distributed
+  * built on andromoda
+
+# Internal HTTP(S) Load Balancing
+* proxy based
+* regional
+* open source Envoy proxy
