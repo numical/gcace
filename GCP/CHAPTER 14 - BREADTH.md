@@ -85,7 +85,7 @@
 * block-based storage - so must format
 * Zonal
 * data encrypted between storage and compute instance
-* AWS: elastic block storage / storge area network
+* AWS: elastic block storage / storage area network
 * persist + replicated
 * provision up front
 * snapshots (and machine images) - incremental + global

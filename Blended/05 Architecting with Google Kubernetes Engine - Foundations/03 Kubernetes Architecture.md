@@ -101,7 +101,7 @@
   * load balanced access to specified pods
   * kinds:
     * ClusterIP - ip address ony within cluster
-    * NodePort - specific poert number on each node's IP
+    * NodePort - specific port number on each node's IP
     * LoadBalancer - expose externally
       * in GKE
         * regional network load balancing

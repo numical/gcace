@@ -26,7 +26,7 @@
 
 # HTTP(S) Load Balancing
 * level 7
-* hence URL routing
+* hence URL routing (URL maps)
 * single anycase global IP 
   * simpler DNS setup
 * ports
@@ -95,14 +95,18 @@
   * terminates SSL
   * certificate management - only one place
   * intelligent routing (on load)
-  * traffic form proxy to backend can be SSL or TCP
+  * traffic from proxy to backend can be SSL or TCP
 * TCP
   * global
   * layer 4
+  * specific ports
 
 # Network Load Balancing
+* external
 * regional
 * TCP/UDP
+* any port number
+* based on forwardng rules
 * non-proxied
   * traffic through load balancer
   * client IP preserved

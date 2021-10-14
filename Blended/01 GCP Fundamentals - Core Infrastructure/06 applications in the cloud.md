@@ -43,7 +43,7 @@
 * monitor & log use
 * generate client libs (?)
 * supports
-  * app enfine flex
+  * app engine flex
   * GKE
   * GCE
 

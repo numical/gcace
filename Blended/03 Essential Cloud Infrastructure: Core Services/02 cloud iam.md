@@ -41,7 +41,7 @@
   * compute engine predefined
     * Compute Admin
     * Network Admin
-      * not firework rules
+      * not firewall rules
       * not SSL certs
     * Storage Admin
 * custom
